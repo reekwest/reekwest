@@ -36,9 +36,12 @@ import org.http4k.core.safeLong
 import org.http4k.core.then
 import org.http4k.core.toParametersMap
 import org.http4k.filter.ServerFilters
+import org.http4k.server.ServerConfig.StopMode
 import org.http4k.sse.SseHandler
 import org.http4k.websocket.WsHandler
 import java.net.InetSocketAddress
+import java.time.Duration.ofSeconds
+import java.util.concurrent.TimeUnit
 
 
 /**
@@ -69,7 +72,14 @@ class Http4kChannelHandler(handler: HttpHandler) : SimpleChannelInboundHandler<F
             .source(RequestSource(address.address.hostAddress, address.port))
 }
 
-data class Netty(val port: Int = 8000) : PolyServerConfig {
+data class Netty(val port: Int = 8000, override val stopMode: StopMode) : PolyServerConfig {
+    constructor(port: Int = 8000) : this(port, StopMode.Graceful(ofSeconds(15)))
+
+    val shutdownTimeoutMillis = when(stopMode) {
+        is StopMode.Graceful -> stopMode.timeout.toMillis()
+        is StopMode.Immediate, is StopMode.Delayed -> throw ServerConfig.UnsupportedStopMode(stopMode)
+    }
+
     override fun toServer(http: HttpHandler?, ws: WsHandler?, sse: SseHandler?): Http4kServer = object : Http4kServer {
         init {
             if(sse != null) throw UnsupportedOperationException("Netty does not support sse")
@@ -106,8 +116,9 @@ data class Netty(val port: Int = 8000) : PolyServerConfig {
 
         override fun stop() = apply {
             closeFuture?.cancel(false)
-            workerGroup.shutdownGracefully()
-            masterGroup.shutdownGracefully()
+
+            workerGroup.shutdownGracefully(minOf(2000L, shutdownTimeoutMillis), shutdownTimeoutMillis, TimeUnit.MILLISECONDS)
+            masterGroup.shutdownGracefully(minOf(2000L, shutdownTimeoutMillis), shutdownTimeoutMillis, TimeUnit.MILLISECONDS)
         }
 
         override fun port(): Int = if (port > 0) port else address.port

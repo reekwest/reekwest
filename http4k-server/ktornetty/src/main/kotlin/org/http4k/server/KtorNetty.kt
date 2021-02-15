@@ -24,11 +24,20 @@ import org.http4k.core.Request
 import org.http4k.core.RequestSource
 import org.http4k.core.Response
 import org.http4k.lens.Header
-import java.util.concurrent.TimeUnit.SECONDS
+import org.http4k.server.ServerConfig.StopMode
+import java.time.Duration.ofSeconds
+import java.util.concurrent.TimeUnit.MILLISECONDS
 import io.ktor.http.Headers as KHeaders
 
 @Suppress("EXPERIMENTAL_API_USAGE")
-data class KtorNetty(val port: Int = 8000) : ServerConfig {
+data class KtorNetty(val port: Int = 8000, override val stopMode: StopMode) : ServerConfig {
+    constructor(port: Int = 8000) : this (port, StopMode.Graceful(ofSeconds(2)))
+
+    val timeout = when (stopMode) {
+        is StopMode.Immediate -> 0
+        is StopMode.Graceful -> stopMode.timeout.toMillis()
+        else -> throw ServerConfig.UnsupportedStopMode(stopMode)
+    }
 
     override fun toServer(http: HttpHandler): Http4kServer = object : Http4kServer {
         private val engine: NettyApplicationEngine = embeddedServer(Netty, port) {
@@ -43,7 +52,7 @@ data class KtorNetty(val port: Int = 8000) : ServerConfig {
         }
 
         override fun stop() = apply {
-            engine.stop(0, 2, SECONDS)
+            engine.stop(minOf(1000, timeout), timeout, MILLISECONDS)
         }
 
         override fun port() = engine.environment.connectors[0].port
